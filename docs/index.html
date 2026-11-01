@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI额度管家 · 跑在你自己电脑上的 AI 花费账本</title>
+<meta name="description" content="开源(MIT)的本地 AI 余额与花费账本：自动采集 DeepSeek/Kimi/智谱/百炼/火山方舟/OpenAI 等平台余额，预算预警，趋势分析。Key 不出你的电脑。">
+<style>
+  :root{--ink:#1A2B40;--sub:#5b6b80;--teal:#1B6B7A;--teal-d:#155a67;--bg:#F3F5F9;--card:#fff;--line:#e4e9f0}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.7}
+  .wrap{max-width:960px;margin:0 auto;padding:0 20px}
+
+  header{background:linear-gradient(135deg,#12233A 0%,#1B4a5a 100%);color:#fff;padding:64px 0 72px}
+  header .tag{display:inline-block;font-size:13px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);padding:3px 12px;border-radius:99px;margin-bottom:18px}
+  h1{font-size:34px;line-height:1.35;font-weight:700}
+  header p.sub{font-size:17px;color:#c6d4e2;margin-top:14px;max-width:640px}
+  .btns{margin-top:28px;display:flex;gap:14px;flex-wrap:wrap}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:12px 26px;border-radius:10px;font-size:16px;text-decoration:none;transition:.15s}
+  .btn-main{background:#2fb3c9;color:#fff;font-weight:600}
+  .btn-main:hover{background:#2297ad}
+  .btn-ghost{border:1px solid rgba(255,255,255,.4);color:#fff}
+  .btn-ghost:hover{background:rgba(255,255,255,.1)}
+
+  section{padding:56px 0}
+  h2{font-size:24px;margin-bottom:8px}
+  .lead{color:var(--sub);margin-bottom:32px;font-size:15px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px}
+  .card h3{font-size:17px;margin-bottom:8px}
+  .card p{font-size:14px;color:var(--sub)}
+  .card .em{font-size:26px;display:block;margin-bottom:10px}
+
+  table{width:100%;border-collapse:collapse;background:var(--card);border-radius:12px;overflow:hidden;font-size:14px;border:1px solid var(--line)}
+  th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--line)}
+  th{background:#f0f4f8;font-size:13px;color:var(--sub)}
+  tr:last-child td{border-bottom:none}
+
+  .steps{counter-reset:s}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px 18px 64px;position:relative;margin-bottom:12px;font-size:15px}
+  .step::before{counter-increment:s;content:counter(s);position:absolute;left:18px;top:16px;width:30px;height:30px;border-radius:50%;background:var(--teal);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
+  .step code{background:#eef2f6;padding:1px 7px;border-radius:6px;font-size:13px}
+
+  .sha{background:#0f1c2e;color:#9fb8cc;border-radius:10px;padding:12px 16px;font-size:12px;font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere;margin-top:10px}
+  .sha b{color:#e3edf5;font-weight:600}
+  .sha span{color:#6f8ba1}
+
+  footer{padding:36px 0 48px;color:var(--sub);font-size:13px;border-top:1px solid var(--line);margin-top:24px}
+  footer a{color:var(--teal);text-decoration:none}
+  .note{font-size:13px;color:var(--sub);background:#f6f0dd;border:1px solid #eadfc0;border-radius:10px;padding:12px 16px;margin-top:20px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <span class="tag">开源 MIT · 本地运行 · 数据不出电脑</span>
+    <h1>AI额度管家<br>跑在你自己电脑上的 AI 花费账本</h1>
+    <p class="sub">DeepSeek、Kimi、智谱、MiniMax、硅基流动、火山方舟、百炼、OpenAI、Claude……散在各平台的余额和花销，一屏看完。回答三个问题：<b>还有多少钱、这个月花了多少、什么时候快用完。</b></p>
+    <div class="btns">
+      <a class="btn btn-main" href="https://github.com/YOUR_NAME/ai-quota-ledger/releases" target="_blank" rel="noopener">⬇ 下载 Windows 版</a>
+      <a class="btn btn-ghost" href="https://github.com/YOUR_NAME/ai-quota-ledger" target="_blank" rel="noopener">查看源码</a>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>它能帮你做什么</h2>
+    <p class="lead">一个"判断账本"，不是行情终端。核心是把散落的额度变成一本能看懂的账。</p>
+    <div class="grid">
+      <div class="card"><span class="em">💰</span><h3>余额一屏总览</h3><p>按量、订阅、在线订阅三类分列，各账号当前余额、本月消耗、累计消耗同口径汇总。</p></div>
+      <div class="card"><span class="em">📈</span><h3>趋势与账目统计</h3><p>余额快照自动累积，自然月/自然年账目、按量真实消耗（余额下降额）、订阅按天摊销。</p></div>
+      <div class="card"><span class="em">🔔</span><h3>预算与微信预警</h3><p>余额不足、消耗异常、每日日报，推送到企业微信或 Server酱。阈值自己定。</p></div>
+      <div class="card"><span class="em">🔐</span><h3>Key 永不出你的电脑</h3><p>没有云端账号、不上传任何数据。密钥存本机，可开 DPAPI 加密；更新包带 Ed25519 防篡改签名。</p></div>
+      <div class="card"><span class="em">🌍</span><h3>多币种原币记账</h3><p>CNY/USD/EUR/JPY/HKD/GBP，存储永远原币，换算只在展示层，汇率口径一目了然。</p></div>
+      <div class="card"><span class="em">🖥️</span><h3>桌面级体验</h3><p>可选托盘壳：关窗收托盘、后台持续采集；也支持纯浏览器模式与 Linux/macOS 启动脚本。</p></div>
+    </div>
+  </div>
+</section>
+
+<section style="background:#fff">
+  <div class="wrap">
+    <h2>平台支持（说实话版）</h2>
+    <p class="lead">平台能力分三种，装之前先看清楚，不画饼。</p>
+    <table>
+      <tr><th>平台</th><th>余额获取方式</th><th>说明</th></tr>
+      <tr><td>DeepSeek / Kimi / 硅基流动 / OpenRouter / Mistral</td><td>全自动</td><td>官方余额接口，定时查询</td></tr>
+      <tr><td>阿里百炼(AK/SK) / 火山方舟(Agent Plan·按量)</td><td>全自动</td><td>费用中心接口，按量需授予费用中心只读权限</td></tr>
+      <tr><td>MiniMax / 智谱 套餐档</td><td>全自动</td><td>账号级配额查询</td></tr>
+      <tr><td>OpenAI / Claude / Gemini / Grok / ChatAnywhere</td><td>探活 + 手填</td><td>官方不提供余额接口，任何软件都查不到；admin Key 可自动读成本报表</td></tr>
+      <tr><td>ChatGPT Plus / Claude Pro 等包月</td><td>填月费</td><td>按 月费÷当月天数 计入每日成本</td></tr>
+    </table>
+    <div class="note">⚠️ 海外平台（OpenAI/Claude/Gemini）能否连通取决于你本地的网络环境，软件本身不提供也不代理任何网络服务；有中转地址可在添加账号时填入「API 地址」。</div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>三步跑起来</h2>
+    <div class="steps">
+      <div class="step">下载安装版（或绿色版解压到任意目录，建议 <code>D:\AI额度管家</code>，别放 C 盘 Program Files）</div>
+      <div class="step">双击启动，浏览器自动打开 <code>http://127.0.0.1:8788</code>，全程本机、无需注册</div>
+      <div class="step">「模型API管理 → 添加API账号」填入平台 Key，回到「当前总览」看账</div>
+    </div>
+    <p class="lead" style="margin-top:18px">Windows 10/11 可直接运行；Linux/macOS 从源码运行（Python 3.10+，后端零第三方依赖）。首次弹出「Windows 已保护你的电脑」→ 点「更多信息」→「仍要运行」（安装包未购买代码签名证书，属正常提示）。</p>
+  </div>
+</section>
+
+<section style="background:#fff">
+  <div class="wrap">
+    <h2>下载与校验</h2>
+    <p class="lead">所有发布文件在 GitHub Releases。下载后建议核对 SHA256，一致说明文件未被篡改。</p>
+    <div class="sha"><b>AI额度管家_安装版_V3.34.0.exe</b><br>SHA256: <span>4CE675C9C82A495002DD447CE5004B47F468EBD243738042208F2A1CC6491441</span><br>大小: <span>15.8 MB</span></div>
+    <div class="sha"><b>AI额度管家_绿色版_V3.34.0.zip</b><br>SHA256: <span>BD231D655EE0FF86FA65D41A6485D30C89CA39BC6A3B315B7A761A473E120DD6</span><br>大小: <span>19.4 MB</span></div>
+    <p class="lead" style="margin-top:16px">核对方法（在文件所在目录打开命令行）：<code style="background:#eef2f6;padding:1px 7px;border-radius:6px;font-size:13px">certutil -hashfile 文件名 SHA256</code></p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <a href="https://github.com/YOUR_NAME/ai-quota-ledger" target="_blank" rel="noopener">GitHub 仓库</a> ·
+    <a href="https://github.com/YOUR_NAME/ai-quota-ledger/blob/main/LICENSE" target="_blank" rel="noopener">MIT 许可证</a> ·
+    用爱发电，不收集任何数据，也没有账号系统。<br>
+    各平台名称与接口归其所有者；使用本工具请遵守各平台服务条款与 API 频率限制。
+  </div>
+</footer>
+
+</body>
+</html>
