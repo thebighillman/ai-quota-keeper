@@ -1,0 +1,9 @@
+{
+  "data": [
+    {"starting_at": "2026-10-01T00:00:00Z", "ending_at": "2026-10-02T00:00:00Z",
+     "results": [{"amount": "1.50", "currency": "USD", "description": "Claude Sonnet"}]},
+    {"starting_at": "2026-10-02T00:00:00Z", "ending_at": "2026-10-03T00:00:00Z",
+     "results": [{"amount": "2.25", "currency": "USD", "description": "Claude Opus"}]}
+  ],
+  "has_more": false
+}

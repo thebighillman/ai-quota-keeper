@@ -1,0 +1,29 @@
+# 构建产物
+app/node_modules/
+app/dist/
+app/.vite/
+
+# 运行时用户数据（绝不入库）
+data/
+*.log
+挂机日志.txt
+运行日志.log
+备份/
+__pycache__/
+*.pyc
+
+# 账本与密钥（防止误提交真实数据）
+data.json
+accounts_config.json
+balance_history.jsonl
+license.json
+install.json
+价格政策.json
+alert_state.json
+
+# 本地开发临时文件
+_test_data/
+*.bak
+*.bak-*
+.venv/
+.DS_Store

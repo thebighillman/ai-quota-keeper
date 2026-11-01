@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <title>AI额度管家</title>
+<!-- ⚠️ 移动端补丁 v2（结构级：侧栏抽屉化）已固化进源码，每次构建自动携带。
+     历史教训：此前补丁只存在于 dist/index.html，前端一重建就被覆盖，导致手机端坏。
+     撤除方法：删除下面这段 style 与 script 即可。 -->
+<style>
+@media (max-width: 768px) {
+  body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  input, select, textarea { font-size: 16px !important; }
+  button, [role="button"] { min-height: 40px; }
+  img, svg { max-width: 100%; height: auto; }
+  pre { white-space: pre-wrap; word-break: break-all; }
+  table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* 侧栏 → 抽屉 */
+  #root > div > aside {
+    position: fixed !important;
+    top: 0; left: 0; bottom: 0;
+    z-index: 60;
+    width: 76vw !important;
+    max-width: 300px;
+    transform: translateX(-105%);
+    transition: transform .25s ease;
+    box-shadow: 0 10px 40px rgba(0,0,0,.3);
+    overflow-y: auto;
+  }
+  html.aq-drawer #root > div > aside { transform: translateX(0) !important; }
+
+  /* 内容区占满屏宽 */
+  #root > div > main {
+    margin-left: 0 !important;
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+  #root > div > main > div {
+    max-width: 100% !important;
+    padding: 12px !important;
+    min-width: 0;
+  }
+
+  /* 卡片网格自适应、行内元素换行 */
+  main [class*="grid-cols"] { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)) !important; }
+  main .flex { flex-wrap: wrap; }
+  main [class*="min-w"] { min-width: 0 !important; }
+  main [class*="w-64"], main [class*="w-72"], main [class*="w-52"], main [class*="w-48"] { width: auto !important; }
+
+  /* 抽屉开关按钮 + 遮罩 */
+  .aq-nav-btn {
+    position: fixed; left: 10px; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); z-index: 61;
+    width: 46px; height: 46px; border-radius: 50%;
+    background: #12233A; color: #fff; border: none; padding: 0;
+    font-size: 22px; line-height: 46px; text-align: center;
+    box-shadow: 0 4px 14px rgba(0,0,0,.3);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .aq-mask {
+    position: fixed; inset: 0; z-index: 59;
+    background: rgba(0,0,0,.42);
+    opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility .2s ease;
+  }
+  html.aq-drawer .aq-mask { opacity: 1; visibility: visible; }
+}
+@media (min-width: 769px) { .aq-nav-btn, .aq-mask { display: none !important; } }
+</style>
+<script>
+(function () {
+  if (window.__aqMobileV2) return; window.__aqMobileV2 = true;
+  function init() {
+    if (document.getElementById('aqNavBtn')) return;
+    var root = document.documentElement;
+    var btn = document.createElement('button');
+    btn.id = 'aqNavBtn'; btn.className = 'aq-nav-btn';
+    btn.setAttribute('aria-label', '菜单'); btn.innerHTML = '☰';
+    var mask = document.createElement('div');
+    mask.id = 'aqMask'; mask.className = 'aq-mask';
+    btn.onclick = function () { root.classList.toggle('aq-drawer'); };
+    mask.onclick = function () { root.classList.remove('aq-drawer'); };
+    document.body.appendChild(mask); document.body.appendChild(btn);
+
+    /* 浮动按钮可拖动: 长按拖动换位置, 位置记住; 轻点仍是打开菜单 */
+    (function makeDraggable(el) {
+      var dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
+      function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+      function save() {
+        try { localStorage.setItem('aq_nav_pos', JSON.stringify({ left: el.style.left, top: el.style.top })); } catch (e) {}
+      }
+      function down(e) {
+        var t = e.touches ? e.touches[0] : e;
+        var r = el.getBoundingClientRect();
+        el.style.left = r.left + 'px'; el.style.top = r.top + 'px'; el.style.bottom = 'auto';
+        el.style.transition = 'none';
+        dragging = true; moved = false;
+        sx = t.clientX; sy = t.clientY; ox = r.left; oy = r.top;
+      }
+      function move(e) {
+        if (!dragging) return;
+        var t = e.touches ? e.touches[0] : e;
+        var dx = t.clientX - sx, dy = t.clientY - sy;
+        if (Math.abs(dx) > 6 || Math.abs(dy) > 6) moved = true;
+        var maxX = window.innerWidth - el.offsetWidth - 6;
+        var maxY = window.innerHeight - el.offsetHeight - 6;
+        el.style.left = clamp(ox + dx, 6, maxX) + 'px';
+        el.style.top = clamp(oy + dy, 6, maxY) + 'px';
+        if (e.cancelable) e.preventDefault();
+      }
+      function up() {
+        if (!dragging) return;
+        dragging = false; el.style.transition = '';
+        if (moved) save();
+      }
+      el.addEventListener('touchstart', down, { passive: true });
+      el.addEventListener('touchmove', move, { passive: false });
+      el.addEventListener('touchend', up);
+      el.addEventListener('mousedown', down);
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      /* 拖动过就不触发「打开菜单」 */
+      el.addEventListener('click', function (e) {
+        if (moved) { e.stopImmediatePropagation(); e.preventDefault(); moved = false; }
+      }, true);
+      /* 恢复上次位置 */
+      try {
+        var p = JSON.parse(localStorage.getItem('aq_nav_pos') || 'null');
+        if (p && p.left && p.top) {
+          el.style.left = p.left; el.style.top = p.top; el.style.bottom = 'auto';
+        }
+      } catch (e) {}
+      /* 屏幕尺寸变化时把按钮夹回可视区 */
+      window.addEventListener('resize', function () {
+        if (!el.style.top) return;
+        var r = el.getBoundingClientRect();
+        el.style.left = clamp(r.left, 6, window.innerWidth - el.offsetWidth - 6) + 'px';
+        el.style.top = clamp(r.top, 6, window.innerHeight - el.offsetHeight - 6) + 'px';
+      });
+    })(btn);
+
+    var aside = document.querySelector('#root > div > aside');
+    if (aside) aside.addEventListener('click', function (e) {
+      if (e.target.closest('button')) setTimeout(function () { root.classList.remove('aq-drawer'); }, 150);
+    });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+</script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
