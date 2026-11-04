@@ -234,6 +234,12 @@ export const quotaRouter = createRouter({
     }),
 
   // ---------- 统计 ----------
+  // TOKEN 用量(V3.34.1): 生产由 Python 主程序 proc_token_usage 提供;
+  // 本 TS 后端只用于开发模式, 返回空结构保持类型一致
+  tokenUsage: publicQuery.query(async () => {
+    return { items: [] as Array<Record<string, unknown>>, generatedAt: "" };
+  }),
+
   summary: publicQuery.query(async () => {
     const db = getDb();
     const list = await db.select().from(accounts);

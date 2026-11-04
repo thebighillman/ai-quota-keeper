@@ -382,10 +382,71 @@ def normalize(d):
     d["currency"] = _norm_currency(d.get("currency"))
     return d
 
+
+# ---------------------------------------------------------------- 同号去重(V3.34.1)
+def _identity_key(a):
+    """同一真实账户的身份键 = 平台 + 账户名称 + 电话(两字段都填了才算)。
+    任何一项留空都视为「无法判定重复」, 返回 None(不参与去重)。"""
+    cn = str(a.get("customName") or "").strip().lower()
+    ph = "".join(ch for ch in str(a.get("phone") or "") if ch.isdigit())
+    if not cn or not ph:
+        return None
+    return (str(a.get("platform") or "").strip().lower(), cn, ph)
+
+
+def _identity_counts(accounts):
+    """每个身份键出现次数(>1 即为疑似同一真实账户重复登记)。"""
+    counts = {}
+    for a in accounts:
+        k = _identity_key(a)
+        if k:
+            counts[k] = counts.get(k, 0) + 1
+    return counts
+
+
+def _dedup_sum(accounts, amount_fn):
+    """按身份键去重后求和: 同一身份键的多个账号只计一次(取最先出现的)。"""
+    seen, total = set(), 0.0
+    for a in accounts:
+        k = _identity_key(a)
+        if k is not None:
+            if k in seen:
+                continue
+            seen.add(k)
+        total += float(amount_fn(a) or 0)
+    return total
+
+
+def _record_token_usage(d, account_id, usage):
+    """TOKEN用量(V3.34.1): 适配器返回官方用量时落快照。
+    仅接受 window="month" 的本月窗口数据; 每账号最多保留 400 条(按月采集约一年)。"""
+    if not isinstance(usage, dict):
+        return
+    tokens = int(usage.get("tokens") or 0)
+    if tokens < 0 or str(usage.get("window")) != "month":
+        return
+    store = d.setdefault("tokenUsage", [])
+    store.append({"accountId": account_id, "ts": time.time(),
+                  "window": "month", "windowLabel": usage.get("windowLabel") or "本月",
+                  "tokens": tokens,
+                  "models": [m for m in (usage.get("models") or []) if isinstance(m, dict)][:30]})
+    mine = [i for i, r in enumerate(store) if r.get("accountId") == account_id]
+    if len(mine) > 400:
+        for i in mine[:-400]:
+            store[i] = None
+        d["tokenUsage"] = [r for r in store if r is not None]
+
+
+TOKEN_USAGE_PLATFORMS = {"glm"}  # 官方有 token 用量接口的按量平台(其余在模块里如实标注)
+
+
 DEFAULTS = {"platform": "custom", "name": "", "groupName": "默认", "apiType": "payg",
             "remaining": 0, "quotaPercent": None, "monthlyUsed": 0, "monthlyFee": 0,
             "totalRecharge": 0, "budget": 0, "collectMethod": "手动录入",
             "note": None, "validUntil": None,
+            # V3.34.1: 同号去重的身份字段(选填) —— 用户在该平台的自定义名称 + 电话,
+            # 平台+两字段完全相同视为同一真实账户, 累计充值/总投入只计一次
+            "customName": "", "phone": "",
             # 订阅配额重置周期(仅 sub 有意义): weekly=每周 / monthly=每月; resetDay: 周=0-6(周一0) 月=1-31
             "resetCycle": None, "resetDay": None,
             # 订阅开始日(仅 sub 有意义, YYYY-MM-DD): 用于算「已计费周期数」。空=用最早快照日兜底
@@ -749,7 +810,40 @@ def _account_view(d, a, cur_amt):
         out["remainingMoney"] = round(rem, 2)
         # 本月真实消耗: 自然月1号起, 余额快照「下降额」累加(与账目统计同口径)
         out["monthUsedReal"] = round(_month_used_from_snapshots(d, a["id"]), 2)
+    # 同号去重标记(V3.34.1): 同平台另一账号的身份键相同(账户名称+电话都填且一致)
+    ik = _identity_key(a)
+    out["dupIdentity"] = bool(ik) and _identity_counts(d.get("accounts", [])).get(ik, 0) > 1
     return out
+
+
+def proc_token_usage(_inp):
+    """TOKEN用量(V3.34.1): 按账号展示「官方接口自动采集」的本月 token 用量。
+
+    只有官方开放了用量接口的平台才有数据(当前: 智谱按量);
+    其它平台如实标注 hasApi=False, 界面提示"官方未开放", 不做估算不编造。
+    """
+    d = _load()
+    by_acc = {}
+    for r in (d.get("tokenUsage") or []):
+        by_acc.setdefault(r.get("accountId"), []).append(r)
+    items = []
+    for a in d.get("accounts", []):
+        recs = sorted(by_acc.get(a["id"], []), key=lambda r: r.get("ts") or 0)
+        latest = recs[-1] if recs else None
+        items.append({
+            "id": a.get("id"), "platform": a.get("platform"), "name": a.get("name"),
+            "customName": a.get("customName") or "",
+            "hasApi": bool(a.get("platform") in TOKEN_USAGE_PLATFORMS
+                       and a.get("apiType") != "sub"),
+            "tokens": (latest or {}).get("tokens"),
+            "windowLabel": (latest or {}).get("windowLabel") or "本月",
+            "models": (latest or {}).get("models") or [],
+            "points": [{"ts": r.get("ts"), "tokens": r.get("tokens")}
+                       for r in recs[-30:]],
+            "updatedAt": (datetime.fromtimestamp(latest["ts"]).strftime("%m-%d %H:%M")
+                          if latest else ""),
+        })
+    return {"items": items, "generatedAt": _now()}
 
 
 def _upsert_one(d, inp):
@@ -892,6 +986,9 @@ def proc_import_all(inp):
                     data["currency"] = exist["currency"]
                 if exist.get("totalRecharge"):
                     data["totalRecharge"] = exist["totalRecharge"]
+                # 同号去重身份字段(V3.34.1): 代理不掌握, 同步必须原样保留
+                data["customName"] = exist.get("customName") or ""
+                data["phone"] = exist.get("phone") or ""
                 if exist.get("monthlyFee"):
                     data["monthlyFee"] = exist["monthlyFee"]
                 if exist.get("validUntil"):
@@ -926,6 +1023,9 @@ def proc_import_all(inp):
             if data.get("platform") in ("minimax", "glm", "chatanywhere") and data.get("apiType") == "payg" and exist is not None:
                 snap_val = float(exist.get("remaining", snap_val))
             d["snapshots"].append({"accountId": aid, "remaining": snap_val, "collectedAt": _now()})
+            # TOKEN用量(V3.34.1): 适配器带回官方用量时落快照(无接口的平台不会带 usage 字段)
+            if raw.get("usage"):
+                _record_token_usage(d, aid, raw.get("usage"))
         _save(d)
     return {"ok": True, "added": added, "total": len(inp.get("items", []))}
 
@@ -977,8 +1077,10 @@ def proc_summary(_inp):
             if a.get("apiType") != "sub":
                 remaining_total += _fx(a.get("remaining") or 0, a.get("currency"), disp)
     # 按量账号累计充值合计(总投入额度的参考值之一) —— 统一换成显示币
-    recharge_total = sum(_fx(a.get("totalRecharge") or 0, a.get("currency"), disp)
-                         for a in lst if a.get("apiType") != "sub")
+    # V3.34.1: 同号去重(平台+账户名称+电话完全一致只计一次)
+    recharge_total = _dedup_sum(
+        [a for a in lst if a.get("apiType") != "sub"],
+        lambda a: _fx(a.get("totalRecharge") or 0, a.get("currency"), disp))
     by_plat = {}
     for a in lst:
         cur = by_plat.setdefault(a["platform"], {
@@ -1614,18 +1716,17 @@ def _auto_total_quota(d):
 
     订阅实际已付: 年付(截止日距今>90天)=月费×12; 月付滚动=已计费周期数×周期费。
     与「模型API管理」页的累计充值列完全同口径(同一组函数)。
+    V3.34.1: 同号去重 —— 平台+账户名称+电话完全相同的账号, 累计充值只计一次。
     """
-    total = 0.0
     disp = _disp_currency(d)
-    for a in d.get("accounts", []):
+    def _amt(a):
         if a.get("apiType") == "sub":
             info = _sub_reset_info(d, a)
             periods = _sub_billed_periods(_sub_since(d, a), info.get("cycle"))
-            total += _fx(_sub_total_recharge(a, info.get("cycle"), periods),
-                         a.get("currency"), disp)
-        else:
-            total += _fx(a.get("totalRecharge") or 0, a.get("currency"), disp)
-    return round(total, 2)
+            return _fx(_sub_total_recharge(a, info.get("cycle"), periods),
+                       a.get("currency"), disp)
+        return _fx(a.get("totalRecharge") or 0, a.get("currency"), disp)
+    return round(_dedup_sum(d.get("accounts", []), _amt), 2)
 
 
 def proc_get_total_quota(_inp):
@@ -1644,8 +1745,8 @@ def proc_get_total_quota(_inp):
     auto = _auto_total_quota(d)
     led = _ledger_data(d)
     spent = round(sum(float(y.get("total", 0.0)) for y in led.get("years", [])), 2)
-    recharge = sum(_fx(a.get("totalRecharge") or 0, a.get("currency"), disp)
-                   for a in d.get("accounts", []) if a.get("apiType") != "sub")
+    recharge = _dedup_sum([a for a in d.get("accounts", []) if a.get("apiType") != "sub"],
+                          lambda a: _fx(a.get("totalRecharge") or 0, a.get("currency"), disp))
     # 与账号列表同口径的聚合: 本月摊销共享一次 _ledger_data 当前月明细
     cur_ym = datetime.now().strftime("%Y-%m")
     cur = next((m for m in led.get("months", []) if m["month"] == cur_ym), None)
@@ -1875,6 +1976,7 @@ PROCS = {
     "quota.list": proc_list, "quota.upsert": proc_upsert, "quota.remove": proc_remove,
     "quota.collect": proc_collect, "quota.importAll": proc_import_all,
     "quota.summary": proc_summary, "quota.trend": proc_trend,
+    "quota.tokenUsage": proc_token_usage,
     "quota.ledger": proc_ledger,
     "quota.getTotalQuota": proc_get_total_quota, "quota.setTotalQuota": proc_set_total_quota,
     "quota.getAccess": proc_get_access,
@@ -3360,9 +3462,12 @@ def _proxy_items(accounts):
             "monthlyUsed": float(a.get("monthlyUsed") or 0),
             "monthlyFee": float(a.get("monthlyFee") or 0) if is_sub else 0,
             "totalRecharge": 0 if is_sub else float(a.get("totalRecharge") or 0),
+            "customName": a.get("customName") or "",     # V3.34.1: 同号去重身份字段
+            "phone": a.get("phone") or "",
             "collectMethod": a.get("collectMethod") or "API直连",
             "note": a.get("note") or "",
             "validUntil": a.get("validUntil") or "",
+            "usage": a.get("usage"),          # V3.34.1: TOKEN 用量(有接口平台才有)
         })
     return items
 

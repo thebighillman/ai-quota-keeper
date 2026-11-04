@@ -1383,6 +1383,12 @@ def adapter_glm_payg(acc):
     models = "、".join(
         f"{it.get('modelName') or '?'} {int(float(it.get('totalTokens') or 0))/1e6:.1f}M"
         for it in items[:3]) or "暂无"
+    # V3.34.1: 同时返回结构化 token 用量, 主程序据此落「TOKEN用量」模块
+    usage = {"window": "month", "windowLabel": "本月", "unit": "tokens",
+             "tokens": tokens,
+             "models": [{"name": it.get("modelName") or "?",
+                         "tokens": int(float(it.get("totalTokens") or 0))}
+                        for it in items if float(it.get("totalTokens") or 0) > 0]}
     # 该账号是否同时有 Coding Plan(有则用量混了套餐调用, 不能折算成按量费用)
     try:
         cfg = load_config()
@@ -1400,13 +1406,13 @@ def adapter_glm_payg(acc):
                 "要算按量花销, 请打开智谱控制台「账户余额」页, 在本账号点「采集」录入当前余额, "
                 "系统会按两次录入的差额自动算消耗(建议每天或每次充值后更新一次)")
         return {"remaining": round(remaining, 2), "live": False, "note": note,
-                "kind": "money", "monthlyUsed": 0.0}
+                "kind": "money", "monthlyUsed": 0.0, "usage": usage}
     note = (f"智谱本月用量 {tokens/1e6:.2f}M tokens(约 ¥{cost:.2f}, 按输入:输出=7:3 估算), "
             f"模型: {models}")
     if paid <= 0:
         note = "余额未知(智谱官方无余额接口)：" + note
     return {"remaining": round(remaining, 2), "live": True, "note": note,
-            "kind": "money", "monthlyUsed": cost}
+            "kind": "money", "monthlyUsed": cost, "usage": usage}
 
 
 def adapter_kimi_coding(acc):
@@ -2111,6 +2117,8 @@ def build_accounts(cfg=None):
             "remaining": remaining,
             "monthlyUsed": round(month_used, 2),
             "totalRecharge": recharge,
+            "customName": acc.get("customName") or "",   # 同号去重(V3.34.1)
+            "phone": acc.get("phone") or "",
             "percent": min(percent, 999),
             "collectMethod": ad_label,
             "status": status,
@@ -2127,6 +2135,7 @@ def build_accounts(cfg=None):
             # 额度窗口(V3.17.11): 5小时/7天进度+重置时间, 只展示不计费
             "plan": r.get("plan") or "",
             "windows": r.get("windows") or [],
+            "usage": r.get("usage"),          # V3.34.1: TOKEN 用量(有接口的平台才有)
             # 多币种(V3.19.0): 金额字段是「原币」, 主程序据此换算展示。
             # 优先级: 账号里用户显式设的币种 > 适配器按平台判定 > 平台默认
             "currency": (str(acc.get("currency") or "").strip().upper()
@@ -2157,6 +2166,9 @@ def upsert_account(payload):
         "group": payload.get("group", "默认"),
         "collectFreq": payload.get("collectFreq", ""),
         "totalRecharge": float(payload.get("totalRecharge") or 0),
+        # 同号去重(V3.34.1): 身份字段, 与主程序 data.json 同字段
+        "customName": str(payload.get("customName") or "").strip(),
+        "phone": str(payload.get("phone") or "").strip(),
         # 多币种(V3.19.0): 没显式指定就按平台默认(海外平台 USD, 其余 CNY)
         "currency": (str(payload.get("currency") or "").strip().upper()
                      or PLATFORM_CURRENCY.get(payload.get("platform", ""), "CNY")),
@@ -2180,7 +2192,8 @@ def upsert_account(payload):
                 entry["api_key"] = accounts[idx].get("api_key", "")
             old = accounts[idx]
             for k in ("remaining", "monthlyUsed", "rate", "unit",
-                      "query", "monthlyFee", "validUntil", "note", "base_url"):
+                      "query", "monthlyFee", "validUntil", "note", "base_url",
+                      "customName", "phone"):
                 if k in old:
                     entry[k] = old[k]
             # 没在表单里改币种 → 保留原值(不能因为表单没这个字段就被平台默认值冲掉)

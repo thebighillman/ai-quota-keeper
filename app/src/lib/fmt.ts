@@ -19,6 +19,9 @@ export type AccountView = Account & {
   subCycleLabel?: string;      // 口径说明(展示用)
   currency?: string;           // 账号原币(V3.19.0): CNY/USD/EUR... 金额字段都是原币
   fxRate?: number;             // 原币→显示货币 的换算系数(后端按当前显示币算好)
+  customName?: string;         // 同号去重(V3.34.1): 用户在该平台的自定义名称(选填)
+  phone?: string;              // 同号去重(V3.34.1): 联系电话(选填, 与账户名称一起判定)
+  dupIdentity?: boolean;       // 同号去重(V3.34.1): 存在另一账号身份完全相同(累计充值只计一次)
 };
 
 export const PLATFORMS: Record<string, { name: string; color: string; abbr: string }> = {

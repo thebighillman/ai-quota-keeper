@@ -22,6 +22,7 @@ const EMPTY = {
   resetCycle: "" as "" | "weekly" | "monthly", resetDay: null as number | null,
   subSince: null as string | null,
   currency: "CNY",
+  customName: "", phone: "",   // 同号去重(V3.34.1): 选填, 两者都填且与另一账号完全一致才生效
   win5h: null as number | null, win7d: null as number | null, winUpdatedAt: null as string | null,
 };
 
@@ -123,6 +124,7 @@ const API_FORM_EMPTY = {
   currency: "CNY",   // 多币种(V3.19.0): 账号原币, 海外平台自动切 USD
   baseUrl: "",       // 自定义接入点(V3.20.0): 海外平台/中转站可填
   totalRecharge: "", // V3.33.1: 按量账号累计充值(必填, 否则累计消耗/总投入算不出来)
+  customName: "", phone: "",  // V3.34.1: 同号去重身份字段(选填)
 };
 
 // 海外平台默认美元(只是默认值, 用户可在表单里改)
@@ -223,6 +225,9 @@ export default function Accounts({ focusAccount, onFocusHandled }: {
     onError: (e) => setMsg("导入失败: " + e.message),
   });
 
+  // TOKEN用量(V3.34.1): 页内「账号列表 / TOKEN用量」两个视图
+  const [view, setView] = useState<"list" | "tokens">("list");
+
   // 从本地代理同步(代理只在用户自己电脑上运行, Key 不出本机)
   const syncFromProxy = async () => {
     setMsg("正在连接本地代理 ...");
@@ -245,6 +250,8 @@ export default function Accounts({ focusAccount, onFocusHandled }: {
           collectMethod: String(a.collectMethod ?? "API直连"),
           note: String(a.note ?? ""),
           validUntil: a.validUntil ? String(a.validUntil) : null,
+          customName: String(a.customName ?? ""),   // V3.34.1: 同号去重身份字段
+          phone: String(a.phone ?? ""),
         };
       });
       if (!items.length) { setMsg("本地代理里没有账号"); return; }
@@ -272,6 +279,8 @@ export default function Accounts({ focusAccount, onFocusHandled }: {
             : apiForm.apiKey,
           currency: apiForm.currency,
           totalRecharge: Number(apiForm.totalRecharge) || 0,
+          customName: apiForm.customName.trim(),   // V3.34.1: 同号去重身份字段
+          phone: apiForm.phone.trim(),
           ...(apiForm.baseUrl.trim() ? { base_url: apiForm.baseUrl.trim() } : {}),
           ...(apiForm.apiType === "sub"
             ? { query: "quota", monthlyFee: apiForm.monthlyFee }
@@ -339,8 +348,15 @@ export default function Accounts({ focusAccount, onFocusHandled }: {
     <div className="space-y-4">
       <div className="bg-white rounded-xl p-5 shadow-sm">
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-          <div className="font-semibold">
-            账号列表 <span className="text-xs text-slate-400 font-normal">共 {allRows.length} 个 · 按计费方式分三类</span>
+          {/* 视图切换(V3.34.1): 账号列表 / TOKEN用量 */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {([["list", "账号列表"], ["tokens", "TOKEN 用量"]] as const).map(([id, label]) => (
+              <button key={id} onClick={() => setView(id)}
+                className={`px-3.5 py-1.5 text-sm rounded-lg font-medium transition-colors ${view === id ? "bg-[#1B6B7A] text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                {label}
+              </button>
+            ))}
+            <span className="text-xs text-slate-400 font-normal hidden sm:inline">共 {allRows.length} 个账号</span>
           </div>
           <div className="flex gap-2 flex-wrap">
             <button onClick={() => setApiForm({ ...API_FORM_EMPTY })} className="px-3 py-2 text-sm rounded-lg bg-[#1B6B7A] text-white hover:bg-[#155a66]">
@@ -354,7 +370,8 @@ export default function Accounts({ focusAccount, onFocusHandled }: {
             </button>
           </div>
         </div>
-        {/* 类别筛选(V3.30.3): 一眼看清各类有几个, 点一下只看该类 */}
+        {/* 类别筛选(V3.30.3): 一眼看清各类有几个, 点一下只看该类(仅列表视图显示) */}
+        {view === "list" && (
         <div className="flex gap-1.5 flex-wrap mb-3">
           {([
             ["all", "全部", allRows.length, "bg-slate-800 text-white", "bg-slate-100 text-slate-600"],
@@ -368,6 +385,10 @@ export default function Accounts({ focusAccount, onFocusHandled }: {
             </button>
           ))}
         </div>
+        )}
+        {view === "tokens" ? (
+          <TokenUsagePanel />
+        ) : (<>
         {msg && <div className="mb-3 text-sm px-3 py-2 rounded-lg bg-slate-50 text-slate-600">{msg}</div>}
         {/* 桌面端: 精简表格(9 列, 数字单行不换行; 订阅重置详情不放在列表里) */}
         <div className="overflow-x-auto hidden md:block">
@@ -417,7 +438,16 @@ export default function Accounts({ focusAccount, onFocusHandled }: {
                     <td className="pr-3 max-w-[230px]">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span className="font-medium truncate" title={a.name}>{a.name}</span>
+                        {a.dupIdentity && (
+                          <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200"
+                            title="与另一账号的「账户名称+电话」完全一致，判定为同一真实账户：累计充值/总投入只计一次">同号</span>
+                        )}
                       </div>
+                      {a.customName && (
+                        <div className="text-[10px] text-slate-400 truncate" title={`账户: ${a.customName}${a.phone ? " / " + a.phone : ""}`}>
+                          {a.customName}{a.phone ? ` · ${a.phone}` : ""}
+                        </div>
+                      )}
                       {a.groupName && a.groupName !== "默认" && (
                         <div className="text-[10px] text-slate-400 truncate">{a.groupName}</div>
                       )}
@@ -465,6 +495,10 @@ export default function Accounts({ focusAccount, onFocusHandled }: {
                   <span className="inline-flex items-center gap-2 min-w-0">
                     <span className="w-7 h-7 shrink-0 rounded-lg text-white text-[11px] font-bold flex items-center justify-center" style={{ background: pi.color }}>{pi.abbr}</span>
                     <span className="font-medium truncate">{a.name || pi.name}</span>
+                    {a.dupIdentity && (
+                      <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200"
+                        title="与另一账号身份一致(账户名称+电话), 累计充值只计一次">同号</span>
+                    )}
                   </span>
                   <span className="flex items-center gap-1.5 shrink-0">
                     <span className={`inline-flex items-center gap-1 text-[11px] ${st.text}`}><span className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />{a.statusText}</span>
@@ -508,6 +542,7 @@ export default function Accounts({ focusAccount, onFocusHandled }: {
           })}
           {rows.length === 0 && <div className="py-10 text-center text-slate-400 text-sm">暂无账号。点上方「添加API账号」或「手动录入」</div>}
         </div>
+        </>)}
       </div>
 
       {/* 添加 API 账号弹窗(Key 写入本地代理, 自动采集) */}
@@ -558,6 +593,22 @@ export default function Accounts({ focusAccount, onFocusHandled }: {
                   onChange={(e) => setApiForm({ ...apiForm, name: e.target.value })}
                   placeholder="如: DeepSeek-写作系统" />
               </label>
+              {/* 同号去重(V3.34.1): 两个选填字段都填且与另一账号完全一致时, 累计充值/总投入只计一次 */}
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">账户名称(选填)
+                  <input className="mt-1 w-full border rounded-lg px-2 py-1.5" value={apiForm.customName}
+                    onChange={(e) => setApiForm({ ...apiForm, customName: e.target.value })}
+                    placeholder="你在该平台的自定义名称" />
+                </label>
+                <label className="block">电话(选填)
+                  <input className="mt-1 w-full border rounded-lg px-2 py-1.5" value={apiForm.phone}
+                    onChange={(e) => setApiForm({ ...apiForm, phone: e.target.value })}
+                    placeholder="用于识别同一真实账户" />
+                </label>
+              </div>
+              <div className="text-[11px] text-slate-400 leading-relaxed -mt-1">
+                同平台填多个 Key 其实是同一个账户时：把这两栏填成一样的，「累计充值 / 总投入」就不会重复累加（只计一次）。
+              </div>
               <label className="block">结算币种
                 <select className="mt-1 w-full border rounded-lg px-2 py-1.5" value={apiForm.currency}
                   onChange={(e) => setApiForm({ ...apiForm, currency: e.target.value })}>
@@ -711,6 +762,16 @@ export default function Accounts({ focusAccount, onFocusHandled }: {
                 </select>
               </label>
               <label>名称<input className="mt-1 w-full border rounded-lg px-2 py-1.5" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="如: DeepSeek 主账号" /></label>
+              {/* 同号去重(V3.34.1): 选填; 两个字段都填且与另一账号完全一致时, 累计充值/总投入只计一次 */}
+              <label>账户名称(选填)
+                <input className="mt-1 w-full border rounded-lg px-2 py-1.5" value={editing.customName ?? ""} onChange={(e) => setEditing({ ...editing, customName: e.target.value })} placeholder="你在该平台的自定义名称" />
+              </label>
+              <label>电话(选填)
+                <input className="mt-1 w-full border rounded-lg px-2 py-1.5" value={editing.phone ?? ""} onChange={(e) => setEditing({ ...editing, phone: e.target.value })} placeholder="用于识别同一真实账户" />
+              </label>
+              <div className="col-span-2 text-[11px] text-slate-400 leading-relaxed">
+                同平台多个 Key 属于同一真实账户时，两栏填成一致即自动去重：「累计充值 / 总投入」只计一次，列表会显示「同号」标记。
+              </div>
               <label>币种
                 <select className="mt-1 w-full border rounded-lg px-2 py-1.5" value={editing.currency || "CNY"}
                   onChange={(e) => setEditing({ ...editing, currency: e.target.value })}>
@@ -890,3 +951,114 @@ export default function Accounts({ focusAccount, onFocusHandled }: {
     </div>
   );
 }
+
+// ============================== TOKEN 用量(V3.34.1) ==============================
+type TokenUsageItem = {
+  id: number; platform: string; name: string; customName?: string;
+  hasApi: boolean; tokens?: number | null; windowLabel: string;
+  models: { name: string; tokens: number }[];
+  points: { ts: number; tokens: number }[];
+  updatedAt: string;
+};
+
+function fmtTokens(v: number): string {
+  if (v >= 1e8) return (v / 1e8).toFixed(2) + " 亿";
+  if (v >= 1e4) return (v / 1e4).toFixed(1) + " 万";
+  return String(Math.round(v));
+}
+
+function TokenUsagePanel() {
+  const q = trpc.quota.tokenUsage.useQuery(undefined, { refetchInterval: 30000 });
+  const items = (q.data?.items ?? []) as TokenUsageItem[];
+  if (q.isLoading) return <div className="py-10 text-center text-slate-400 text-sm">正在读取 TOKEN 用量…</div>;
+  if (q.isError) return <div className="py-10 text-center text-red-500 text-sm">读取失败：{q.error.message}</div>;
+  return (
+    <div className="space-y-3">
+      <div className="text-[12px] text-slate-400 leading-relaxed">
+        只展示「官方开放了用量接口」的平台自动采集的真实 token 用量（随余额同步自动刷新，无需手填）；
+        官方没开放接口的平台如实标注，不做估算、不编数字。
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {items.map((a) => <TokenUsageCard key={a.id} a={a} />)}
+        {!items.length && <div className="col-span-full py-10 text-center text-slate-400 text-sm">暂无账号</div>}
+      </div>
+    </div>
+  );
+}
+
+function TokenUsageCard({ a }: { a: TokenUsageItem }) {
+  const pi = platformInfo(a.platform);
+  const models = a.models ?? [];
+  const modelMax = Math.max(1, ...models.map((m) => m.tokens));
+  const pts = a.points ?? [];
+  const ptMax = Math.max(1, ...pts.map((p) => p.tokens));
+  return (
+    <div className="border border-slate-200 rounded-xl p-4 bg-white">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <span className="inline-flex items-center gap-2 min-w-0">
+          <span className="w-7 h-7 shrink-0 rounded-lg text-white text-[11px] font-bold flex items-center justify-center" style={{ background: pi.color }}>{pi.abbr}</span>
+          <span className="min-w-0">
+            <span className="font-medium truncate block">{a.name}</span>
+            <span className="text-[11px] text-slate-400 truncate block">
+              {pi.name}{a.customName ? ` · ${a.customName}` : ""}
+            </span>
+          </span>
+        </span>
+        {a.hasApi
+          ? <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">官方接口自动采集</span>
+          : <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">官方未开放接口</span>}
+      </div>
+
+      {!a.hasApi && (
+        <div className="text-[12px] text-slate-400 leading-relaxed bg-slate-50 rounded-lg px-3 py-2">
+          该平台官方没有开放 token 用量查询接口，任何软件都拿不到。
+          可以跟踪的是余额变化：请看「账号列表」里的消耗与趋势。
+        </div>
+      )}
+
+      {a.hasApi && (a.tokens == null) && (
+        <div className="text-[12px] text-slate-400 bg-slate-50 rounded-lg px-3 py-2">
+          支持自动采集，等第一次同步完成即出现数据（通常与余额刷新同周期）。
+        </div>
+      )}
+
+      {a.hasApi && a.tokens != null && (
+        <>
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-bold tabular-nums">{fmtTokens(a.tokens)}</span>
+            <span className="text-[12px] text-slate-400">tokens · {a.windowLabel}
+              {a.updatedAt ? ` · 更新于 ${a.updatedAt}` : ""}</span>
+          </div>
+
+          {models.length > 0 && (
+            <div className="mt-2.5 space-y-1">
+              {models.slice(0, 6).map((m) => (
+                <div key={m.name} className="flex items-center gap-2 text-[12px]">
+                  <span className="w-28 shrink-0 truncate text-slate-500" title={m.name}>{m.name}</span>
+                  <span className="flex-1 h-2 rounded bg-slate-100 overflow-hidden">
+                    <span className="block h-full rounded" style={{ width: `${Math.max(2, (m.tokens / modelMax) * 100)}%`, background: pi.color }} />
+                  </span>
+                  <span className="shrink-0 tabular-nums text-slate-500">{fmtTokens(m.tokens)}</span>
+                </div>
+              ))}
+              {models.length > 6 && <div className="text-[11px] text-slate-400">… 共 {models.length} 个模型</div>}
+            </div>
+          )}
+
+          {pts.length >= 2 && (
+            <div className="mt-3">
+              <div className="text-[11px] text-slate-400 mb-1">采集走势（{a.windowLabel}，近 {pts.length} 次）</div>
+              <div className="flex items-end gap-[2px] h-8">
+                {pts.map((p, i) => (
+                  <span key={i} className="flex-1 rounded-t" title={fmtTokens(p.tokens)}
+                    style={{ height: `${Math.max(6, (p.tokens / ptMax) * 100)}%`, background: pi.color, opacity: 0.35 + 0.65 * (i / Math.max(1, pts.length - 1)) }} />
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
