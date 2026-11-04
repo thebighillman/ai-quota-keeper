@@ -417,27 +417,6 @@ def _dedup_sum(accounts, amount_fn):
     return total
 
 
-def _record_token_usage(d, account_id, usage):
-    """TOKEN用量(V3.34.1): 适配器返回官方用量时落快照。
-    仅接受 window="month" 的本月窗口数据; 每账号最多保留 400 条(按月采集约一年)。"""
-    if not isinstance(usage, dict):
-        return
-    tokens = int(usage.get("tokens") or 0)
-    if tokens < 0 or str(usage.get("window")) != "month":
-        return
-    store = d.setdefault("tokenUsage", [])
-    store.append({"accountId": account_id, "ts": time.time(),
-                  "window": "month", "windowLabel": usage.get("windowLabel") or "本月",
-                  "tokens": tokens,
-                  "models": [m for m in (usage.get("models") or []) if isinstance(m, dict)][:30]})
-    mine = [i for i, r in enumerate(store) if r.get("accountId") == account_id]
-    if len(mine) > 400:
-        for i in mine[:-400]:
-            store[i] = None
-        d["tokenUsage"] = [r for r in store if r is not None]
-
-
-TOKEN_USAGE_PLATFORMS = {"glm"}  # 官方有 token 用量接口的按量平台(其余在模块里如实标注)
 
 
 DEFAULTS = {"platform": "custom", "name": "", "groupName": "默认", "apiType": "payg",
@@ -816,36 +795,6 @@ def _account_view(d, a, cur_amt):
     return out
 
 
-def proc_token_usage(_inp):
-    """TOKEN用量(V3.34.1): 按账号展示「官方接口自动采集」的本月 token 用量。
-
-    只有官方开放了用量接口的平台才有数据(当前: 智谱按量);
-    其它平台如实标注 hasApi=False, 界面提示"官方未开放", 不做估算不编造。
-    """
-    d = _load()
-    by_acc = {}
-    for r in (d.get("tokenUsage") or []):
-        by_acc.setdefault(r.get("accountId"), []).append(r)
-    items = []
-    for a in d.get("accounts", []):
-        recs = sorted(by_acc.get(a["id"], []), key=lambda r: r.get("ts") or 0)
-        latest = recs[-1] if recs else None
-        items.append({
-            "id": a.get("id"), "platform": a.get("platform"), "name": a.get("name"),
-            "customName": a.get("customName") or "",
-            "hasApi": bool(a.get("platform") in TOKEN_USAGE_PLATFORMS
-                       and a.get("apiType") != "sub"),
-            "tokens": (latest or {}).get("tokens"),
-            "windowLabel": (latest or {}).get("windowLabel") or "本月",
-            "models": (latest or {}).get("models") or [],
-            "points": [{"ts": r.get("ts"), "tokens": r.get("tokens")}
-                       for r in recs[-30:]],
-            "updatedAt": (datetime.fromtimestamp(latest["ts"]).strftime("%m-%d %H:%M")
-                          if latest else ""),
-        })
-    return {"items": items, "generatedAt": _now()}
-
-
 def _upsert_one(d, inp):
     data = normalize({**DEFAULTS, **{k: v for k, v in inp.items() if k in DEFAULTS}})
     st, stx = derive_status(data)
@@ -1023,9 +972,6 @@ def proc_import_all(inp):
             if data.get("platform") in ("minimax", "glm", "chatanywhere") and data.get("apiType") == "payg" and exist is not None:
                 snap_val = float(exist.get("remaining", snap_val))
             d["snapshots"].append({"accountId": aid, "remaining": snap_val, "collectedAt": _now()})
-            # TOKEN用量(V3.34.1): 适配器带回官方用量时落快照(无接口的平台不会带 usage 字段)
-            if raw.get("usage"):
-                _record_token_usage(d, aid, raw.get("usage"))
         _save(d)
     return {"ok": True, "added": added, "total": len(inp.get("items", []))}
 
@@ -1976,7 +1922,6 @@ PROCS = {
     "quota.list": proc_list, "quota.upsert": proc_upsert, "quota.remove": proc_remove,
     "quota.collect": proc_collect, "quota.importAll": proc_import_all,
     "quota.summary": proc_summary, "quota.trend": proc_trend,
-    "quota.tokenUsage": proc_token_usage,
     "quota.ledger": proc_ledger,
     "quota.getTotalQuota": proc_get_total_quota, "quota.setTotalQuota": proc_set_total_quota,
     "quota.getAccess": proc_get_access,
@@ -3467,7 +3412,6 @@ def _proxy_items(accounts):
             "collectMethod": a.get("collectMethod") or "API直连",
             "note": a.get("note") or "",
             "validUntil": a.get("validUntil") or "",
-            "usage": a.get("usage"),          # V3.34.1: TOKEN 用量(有接口平台才有)
         })
     return items
 

@@ -1383,12 +1383,6 @@ def adapter_glm_payg(acc):
     models = "、".join(
         f"{it.get('modelName') or '?'} {int(float(it.get('totalTokens') or 0))/1e6:.1f}M"
         for it in items[:3]) or "暂无"
-    # V3.34.1: 同时返回结构化 token 用量, 主程序据此落「TOKEN用量」模块
-    usage = {"window": "month", "windowLabel": "本月", "unit": "tokens",
-             "tokens": tokens,
-             "models": [{"name": it.get("modelName") or "?",
-                         "tokens": int(float(it.get("totalTokens") or 0))}
-                        for it in items if float(it.get("totalTokens") or 0) > 0]}
     # 该账号是否同时有 Coding Plan(有则用量混了套餐调用, 不能折算成按量费用)
     try:
         cfg = load_config()
@@ -1406,13 +1400,13 @@ def adapter_glm_payg(acc):
                 "要算按量花销, 请打开智谱控制台「账户余额」页, 在本账号点「采集」录入当前余额, "
                 "系统会按两次录入的差额自动算消耗(建议每天或每次充值后更新一次)")
         return {"remaining": round(remaining, 2), "live": False, "note": note,
-                "kind": "money", "monthlyUsed": 0.0, "usage": usage}
+                "kind": "money", "monthlyUsed": 0.0}
     note = (f"智谱本月用量 {tokens/1e6:.2f}M tokens(约 ¥{cost:.2f}, 按输入:输出=7:3 估算), "
             f"模型: {models}")
     if paid <= 0:
         note = "余额未知(智谱官方无余额接口)：" + note
     return {"remaining": round(remaining, 2), "live": True, "note": note,
-            "kind": "money", "monthlyUsed": cost, "usage": usage}
+            "kind": "money", "monthlyUsed": cost}
 
 
 def adapter_kimi_coding(acc):
@@ -2135,7 +2129,6 @@ def build_accounts(cfg=None):
             # 额度窗口(V3.17.11): 5小时/7天进度+重置时间, 只展示不计费
             "plan": r.get("plan") or "",
             "windows": r.get("windows") or [],
-            "usage": r.get("usage"),          # V3.34.1: TOKEN 用量(有接口的平台才有)
             # 多币种(V3.19.0): 金额字段是「原币」, 主程序据此换算展示。
             # 优先级: 账号里用户显式设的币种 > 适配器按平台判定 > 平台默认
             "currency": (str(acc.get("currency") or "").strip().upper()
