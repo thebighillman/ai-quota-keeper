@@ -58,8 +58,8 @@
     <h1>AI额度管家<br>跑在你自己电脑上的 AI 花费账本</h1>
     <p class="sub">DeepSeek、Kimi、智谱、MiniMax、硅基流动、火山方舟、百炼、OpenAI、Claude……散在各平台的余额和花销，一屏看完。回答三个问题：<b>还有多少钱、这个月花了多少、什么时候快用完。</b></p>
     <div class="btns">
-      <a class="btn btn-main" data-repo="/releases" href="https://github.com/thebighillman/ai-quota-keeper/releases" target="_blank" rel="noopener">⬇ 下载 Windows 版</a>
-      <a class="btn btn-ghost" data-repo="" href="https://github.com/thebighillman/ai-quota-keeper" target="_blank" rel="noopener">查看源码</a>
+      <a class="btn btn-main" data-repo="" href="https://github.com/thebighillman/ai-quota-keeper" target="_blank" rel="noopener">在 GitHub 上查看源码</a>
+      <a class="btn btn-ghost" href="#start" rel="noopener">怎么跑起来</a>
     </div>
   </div>
 </header>
@@ -97,23 +97,25 @@
 
 <section>
   <div class="wrap">
-    <h2>三步跑起来</h2>
+    <h2>三步跑起来（从源码）</h2>
     <div class="steps">
-      <div class="step">下载安装版（或绿色版解压到任意目录，建议 <code>D:\AI额度管家</code>，别放 C 盘 Program Files）</div>
-      <div class="step">双击启动，浏览器自动打开 <code>http://127.0.0.1:8788</code>，全程本机、无需注册</div>
-      <div class="step">「模型API管理 → 添加API账号」填入平台 Key，回到「当前总览」看账</div>
+      <div class="step">装 Python 3.10+（Windows 安装时记得勾选 <code>Add Python to PATH</code>）</div>
+      <div class="step">下载代码：仓库页点 <b>Code → Download ZIP</b> 解压，或 <code>git clone https://github.com/thebighillman/ai-quota-keeper.git</code></div>
+      <div class="step">进目录执行 <code>python 启动额度管家.py</code>，浏览器打开 <code>http://127.0.0.1:8788</code>，到「模型API管理」填 Key</div>
     </div>
-    <p class="lead" style="margin-top:18px">压缩包内置便携 Python，解压后双击 <code>启动AI额度管家.bat</code> 即可，无需安装任何环境。Linux/macOS 从源码运行（Python 3.10+，后端零第三方依赖）。若 Windows 弹出「已保护你的电脑」，点「更多信息」→「仍要运行」（未购买代码签名证书，属正常提示）。</p>
+    <p class="lead" style="margin-top:18px">后端只用 Python 标准库，不需要 pip 装任何依赖；仓库已带编译好的前端，下载后即可运行。只有想改界面时才需要 Node.js 18+：<code>cd app &amp;&amp; npm install &amp;&amp; npm run build</code>，再把 <code>app/dist/public</code> 的内容复制到根目录 <code>dist/</code>。</p>
   </div>
 </section>
 
 <section style="background:#fff">
   <div class="wrap">
-    <h2>下载与校验</h2>
-    <p class="lead">所有发布文件在 GitHub Releases。下载后建议核对 SHA256，一致说明文件未被篡改。</p>
-    <div class="sha"><b>AI额度管家_绿色版_V3.34.3.zip</b><br>SHA256: <span>CFCDECF60A49DB1C5F4F68B62F273530DA27E832B215A380DFF81FE85082CC2C</span><br>大小: <span>19.4 MB</span></div>
-    <div class="sha"><b>安装版（exe）</b><br>整理中，可先用绿色版：解压即用，功能完全一致</div>
-    <p class="lead" style="margin-top:16px">核对方法（在文件所在目录打开命令行）：<code style="background:#eef2f6;padding:1px 7px;border-radius:6px;font-size:13px">certutil -hashfile 文件名 SHA256</code></p>
+    <h2>运行环境与说明</h2>
+    <p class="lead">
+      <b>运行环境</b>：Windows 10/11、Linux、macOS，只需 Python 3.10+，后端零第三方依赖。<br>
+      <b>数据位置</b>：账本与 API Key 都存在程序目录 <code>data/</code>，不上传任何服务器，也没有账号系统。<br>
+      <b>备份方式</b>：复制整个 <code>data/</code> 目录即可。<br>
+      <b>安全提示</b>：Key 以本机加密方式保存；换机器或怀疑泄露时，请到对应平台后台吊销重发。
+    </p>
   </div>
 </section>
 
