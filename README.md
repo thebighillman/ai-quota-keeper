@@ -1,4 +1,4 @@
-# AI额度管家（ai-quota-ledger）
+# AI额度管家（ai-quota-keeper）
 
 一个跑在**你自己电脑上**的 AI 平台余额与花费账本：把 DeepSeek、Kimi、智谱、MiniMax、硅基流动、火山方舟、阿里百炼、OpenAI、Claude、Gemini 等平台的余额和配额放进一屏，自动记账、趋势分析、预算预警。
 
