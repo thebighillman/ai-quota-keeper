@@ -1,0 +1,19 @@
+# 默认按文本处理，但明确哪些文件不能做换行转换
+* text=auto eol=lf
+
+# Windows 批处理是 GBK + CRLF，交给 Git 转换会直接弄坏，按二进制原样保存
+*.bat -text
+*.cmd -text
+*.ps1 -text eol=crlf
+
+# 二进制资源
+*.ico binary
+*.png binary
+*.jpg binary
+*.exe binary
+*.dll binary
+*.pyd binary
+*.zip binary
+
+# 锁文件不做 diff
+package-lock.json -diff

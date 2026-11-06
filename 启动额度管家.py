@@ -37,19 +37,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-# pythonw 静默运行(V3.25.1): 无控制台时 stdout/stderr 为 None, print/异常写栈会直接崩。
-# 检测到就重定向到数据目录的 运行日志.log, 双击桌面图标后完全无窗口、出问题也能查。
-if sys.stdout is None or sys.stderr is None:
-    _LOG_DIR = Path(str(os.environ.get("QUOTA_DATA_HOME")
-                        or (Path(str(os.environ.get("LOCALAPPDATA") or "")) / "AI额度管家")))
-    try:
-        _LOG_DIR.mkdir(parents=True, exist_ok=True)
-        _lf = open(_LOG_DIR / "运行日志.log", "a", encoding="utf-8", buffering=1)
-        sys.stdout = _lf
-        sys.stderr = _lf
-    except OSError:
-        sys.stdout = open(os.devnull, "w", encoding="utf-8")
-        sys.stderr = sys.stdout
+# stdout/stderr 的重定向在 DATA_HOME 就绪后进行(见 _rebind_log)
 
 HOST = "127.0.0.1"
 # 端口可用环境变量覆盖(V3.25.0): 便于内测并行跑多个实例, 或 8788 被占用时换口
@@ -85,6 +73,86 @@ def _data_home():
 
 
 DATA_HOME = _data_home()
+
+
+class _SafeStream:
+    """永不抛异常的 stdout/stderr 包装(V3.33.21)。
+
+    pythonw(双击图标)没有控制台, 标准句柄可能是无效值: 任何 print 都会抛
+    `OSError: [Errno 22] Invalid argument`。以前这事只是"日志写不出来",
+    但 V3.33.10 之后后台线程里加了大量 print(flush=True), 于是一句日志
+    就能把整个启动流程带崩 —— 用户看到的现象就是"双击图标打不开"。
+    这里把写/刷盘全部吞掉异常: 日志可以丢, 程序绝不能因打印而崩。
+    """
+
+    def __init__(self, inner=None):
+        self._inner = inner
+
+    def write(self, s):
+        try:
+            if self._inner is not None:
+                self._inner.write(s)
+        except Exception:
+            pass
+        return len(s) if isinstance(s, str) else 0
+
+    def flush(self):
+        try:
+            if self._inner is not None:
+                self._inner.flush()
+        except Exception:
+            pass
+
+    def isatty(self):
+        return False
+
+    def writable(self):
+        return True
+
+    def __getattr__(self, name):
+        try:
+            return getattr(self._inner, name)
+        except Exception:
+            return None
+
+
+def _stream_usable(s):
+    """探测流是否真的能写 —— 只看 is None 不够, devnull/失效句柄也会假通过。"""
+    if s is None:
+        return False
+    try:
+        s.write("")
+        s.flush()
+        return True
+    except Exception:
+        return False
+
+
+def _rebind_log():
+    """pythonw 无控制台时, 把 stdout/stderr 指到「真正的数据目录」并包成安全流。"""
+    try:
+        target = DATA_HOME / "运行日志.log"
+        cur = sys.stdout
+        name = str(getattr(cur, "name", "") or "") if cur is not None else ""
+        if name and Path(name).name == "运行日志.log":
+            pass                                  # 已经指向目标日志
+        elif _stream_usable(cur) and "nul" not in name.lower() and "devnull" not in name.lower():
+            target = None                         # 真有控制台, 保留
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            cur = open(target, "a", encoding="utf-8", buffering=1)
+        sys.stdout = _SafeStream(cur)
+        err = sys.stderr
+        if _stream_usable(err) and "nul" not in str(getattr(err, "name", "")).lower():
+            sys.stderr = _SafeStream(err)
+        else:
+            sys.stderr = _SafeStream(cur)
+    except Exception:
+        sys.stdout = _SafeStream(None)
+        sys.stderr = _SafeStream(None)
+
+
+_rebind_log()
 
 # 首次启动要从程序目录搬走的用户数据(白名单): 只搬已知文件名, 不碰其它东西
 # V3.28.0: 补 license.json/install.json(授权状态与试用起点, 漏了会导致升级后授权丢失)
@@ -650,6 +718,46 @@ def _snap_index(d):
     return idx
 
 
+_GAP_HOURS = 36          # 相邻快照间隔超过 36 小时视为「断档」(软件没开/关机/休眠)
+
+
+def _snap_deltas_by_day(times, vals):
+    """把「相邻两次快照的余额下降额」分配到自然日, 返回 [(YYYY-MM-DD, 金额)]。
+
+    短区间(<=36 小时): 归到区间中点那一天 —— 与旧口径一致, 不制造假分布。
+    长区间(断档): 按小时覆盖比例**均摊**到区间内的每一天。
+       旧实现一律取中点, 于是「11-01 19:21 → 11-06 06:53」这 4 天半的消耗
+       整段被算成 11-04 一天花的, 看起来像"一天用掉了五天的量"。
+       余额快照只知道区间两端, 真实分布不可知; 均摊显然比堆在一天更接近事实,
+       且同一自然月内的合计完全不变(只是分布变平滑), 跨月断档也能自然拆分。
+    """
+    out = []
+    for i in range(1, len(times)):
+        t0, t1 = times[i - 1], times[i]
+        try:
+            delta = float(vals[i]) - float(vals[i - 1])
+        except (TypeError, ValueError):
+            continue
+        if delta >= 0:
+            continue                              # 余额不变 / 上升(充值) → 不计消耗
+        amt = -delta
+        span = (t1 - t0).total_seconds()
+        if span <= 0:
+            continue
+        if span <= _GAP_HOURS * 3600:
+            out.append(((t0 + (t1 - t0) / 2).date().isoformat(), amt))
+            continue
+        cur = t0
+        while cur < t1:
+            nxt = datetime.combine(cur.date() + timedelta(days=1), datetime.min.time())
+            seg_end = min(nxt, t1)
+            w = (seg_end - cur).total_seconds() / span
+            if w > 0:
+                out.append((cur.date().isoformat(), amt * w))
+            cur = seg_end
+    return out
+
+
 def _sub_since(d, a):
     """订阅开始日: 手填 subSince 优先; 否则用该账号最早快照日; 再退 createdAt; 最后退今天。"""
     raw = str(a.get("subSince") or "").strip()
@@ -893,15 +1001,9 @@ def _month_used_from_snapshots(d, account_id):
     """
     month_prefix = datetime.now().strftime("%Y-%m")
     _times, _vals = _snap_index(d).get(account_id, ([], []))
-    total = 0.0
-    for i in range(1, len(_times)):
-        t0, t1 = _times[i - 1], _times[i]
-        delta = _vals[i] - _vals[i - 1]
-        if delta >= 0:
-            continue  # 余额不变/上升(充值) 不计消耗
-        mid = t0 + (t1 - t0) / 2
-        if mid.strftime("%Y-%m") == month_prefix:
-            total += -delta
+    # 断档区间按天均摊(见 _snap_deltas_by_day), 不再整段堆在中点那天
+    total = sum(amt for day, amt in _snap_deltas_by_day(_times, _vals)
+                if day[:7] == month_prefix)
     return round(total, 4)
 
 
@@ -1151,20 +1253,17 @@ def proc_trend(inp):
                 dq = daily_quota.setdefault(dstr, {})
                 dq[a["platform"]] = dq.get(a["platform"], 0.0) + _fx(amt, a.get("currency"), disp)
             continue
-        for i in range(1, len(arr)):
-            t0, r0 = arr[i - 1]
-            t1, r1 = arr[i]
+        # 断档区间按天均摊(旧实现把整段算成中点那一天, 看着像"一天花掉五天")
+        _tt = [x[0] for x in arr]
+        _vv = [x[1] for x in arr]
+        for day, amt in _snap_deltas_by_day(_tt, _vv):
             try:
-                delta = float(r1) - float(r0)
-            except (TypeError, ValueError):
+                if datetime.fromisoformat(day) < since:
+                    continue
+            except ValueError:
                 continue
-            if delta >= 0:
-                continue                      # 充值/不变 → 不计消耗
-            mid = t0 + (t1 - t0) / 2
-            if mid < since:
-                continue
-            du = daily_used.setdefault(mid.date().isoformat(), {})
-            du[a["platform"]] = du.get(a["platform"], 0.0) + _fx(-delta, a.get("currency"), disp)
+            du = daily_used.setdefault(day, {})
+            du[a["platform"]] = du.get(a["platform"], 0.0) + _fx(amt, a.get("currency"), disp)
     payg_plats = sorted({a["platform"] for a in accs.values() if a.get("apiType") != "sub"})
     sub_plats = sorted({a["platform"] for a in accs.values() if a.get("apiType") == "sub"})
     out, quota_out = [], []
@@ -1540,18 +1639,16 @@ def _ledger_data(d):
             arr = sorted(arr, key=lambda x: str(x.get("collectedAt", "")))
         except Exception:
             continue
-        for i in range(1, len(arr)):
+        times, vals = [], []
+        for s in arr:
             try:
-                t0 = datetime.fromisoformat(str(arr[i - 1].get("collectedAt", "")))
-                t1 = datetime.fromisoformat(str(arr[i].get("collectedAt", "")))
-                delta = float(arr[i]["remaining"]) - float(arr[i - 1]["remaining"])
-            except (ValueError, TypeError, KeyError):
+                times.append(datetime.fromisoformat(str(s.get("collectedAt", ""))))
+                vals.append(float(s.get("remaining")))
+            except (ValueError, TypeError):
                 continue
-            if delta >= 0:
-                continue  # 余额不变 / 上升(充值) → 不计消耗
-            mid = t0 + (t1 - t0) / 2
-            _add(mid.strftime("%Y-%m"), aid, plat, -delta,
-                 cur=a.get("currency"), kind="payg")
+        # 与「消耗总览 / 趋势」同源 —— 断档按天均摊, 短区间归中点
+        for day, amt in _snap_deltas_by_day(times, vals):
+            _add(day[:7], aid, plat, amt, cur=a.get("currency"), kind="payg")
 
     # ---- 2) 订阅账号: 月费固定 → 按天摊销(V3.17.37 定稿口径) ----
     # 用户拍板: 订阅金额只跟时间走, 与配额窗口(5h/7天/月)完全解绑;
@@ -2302,12 +2399,23 @@ def update_check_local():
     return out
 
 
+# 桌面壳注入的重启钩子(V3.33.10): pythonw 下 os.execv 常因标准句柄无效失败
+# (WinError 6), 且报错打在空设备上看不见 → 更新完成但进程从未重启。壳模式必须走钩子。
+_RESTART_HOOK = None
+
+
 def _schedule_self_restart(delay=1.5):
-    """更新主程序后自我重启(V3.17.41): 延迟执行让 HTTP 响应先发出。
-    os.execv 同进程镜像替换: 原命令行窗口/守护脚本都不受影响, 用户无感。"""
+    """更新主程序后自我重启: 延迟执行让 HTTP 响应先发出。
+    - 桌面壳模式: 调用壳注入的 _RESTART_HOOK(壳负责拉起新进程并退出自己)
+    - 控制台模式: os.execv 同进程镜像替换
+    """
     def _do():
         try:
-            print("\n[自动更新] 主程序已更新, 正在自动重启生效…", flush=True)
+            print("[自动更新] 主程序已更新, 正在自动重启生效…", flush=True)
+            hook = globals().get("_RESTART_HOOK")
+            if callable(hook):
+                hook()
+                return
             os.execv(sys.executable,
                      [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:])
         except Exception as e:
@@ -2327,7 +2435,7 @@ def _pack_signature_ok(man):
         return False
 
 
-def apply_update_pack(pack):
+def apply_update_pack(pack, apply_files=True):
     """应用更新包: 校验签名 -> 校验版本 -> 备份旧文件 -> 解压替换 + 删除废弃文件。
     V3.17.41 起: 若更新了主程序(启动额度管家.py), 完成后自动重启, 无需用户手动操作。
     V3.23.0 起: 必须是我们签过名的包才应用(堵"任意代码执行"洞);
@@ -2356,6 +2464,10 @@ def apply_update_pack(pack):
         return False, "更新清单里既没有要更新的文件, 也没有要删除的文件"
     # V3.27.0: 补 .pyw(桌面壳) / .sh(Linux) / .ico(favicon) / .css 已有——扩展名白名单跟不上新文件类型会静默拒绝
     allowed = {".py", ".pyw", ".sh", ".md", ".json", ".txt", ".html", ".js", ".css", ".ico", ".bat", ".command", ""}
+    if not apply_files:
+        # 壳模式: 运行中只校验不落盘 —— 真正的替换放到下次启动(服务未起, 绝对安全)
+        return True, ("V%s 更新包校验通过。请关闭软件后重新打开，启动时会自动完成安装（约 3 秒），"
+                      "数据与设置不受影响。" % latest)
     backup = BASE_DIR / "备份" / f"V{cur}"
     backup.mkdir(parents=True, exist_ok=True)
     updated, removed, failed = [], [], []
@@ -2428,9 +2540,16 @@ def apply_update_pack(pack):
         parts.append(f"已更新 {len(updated)} 个文件")
     if removed:
         parts.append(f"已清理 {len(removed)} 个废弃文件")
-    # 主程序被更新 → 自动重启(V3.17.41): 不再需要用户手动关窗重启
+    # 主程序被更新 → 需要重启生效
     need_restart = any(u.replace("\\", "/").lower() == "启动额度管家.py" for u in updated)
     if need_restart:
+        if callable(globals().get("_RESTART_HOOK")):
+            # 桌面壳模式: 不自杀式重启(实测 pythonw 下"杀自己再拉起"不可靠,
+            # 失败就是"更新完软件消失"); 只提示用户重开, 数据/设置全部保留。
+            _schedule_self_restart(delay=1.5)     # 钩子里只写日志, 不退出
+            return True, ("V%s 更新完成: %s。旧文件(含被删文件)备份在 备份/V%s/。"
+                          "请关闭本窗口(托盘右键退出)后重新打开软件，新版本即生效。"
+                          % (latest, ", ".join(parts) or "无变化", cur))
         _schedule_self_restart(delay=1.5)
         return True, ("V%s 更新完成: %s。旧文件(含被删文件)备份在 备份/V%s/。"
                       "主程序已更新, 正在自动重启(约 3 秒), 页面稍后会自动刷新。"
@@ -2765,7 +2884,7 @@ def _origin_allowed(origin, host=None):
 
     ★ 2026-10-16 三次修正(重要): 改「按请求的 Host 比对」, 而不是写死回环名单。
       原因: 手机端经 FRP 内网穿透访问时, 浏览器发来的 Host/Origin 是公网地址
-      (如 203.0.113.10:18001), 写死回环名单会把它当"外站"拒掉 —— 这正是手机端
+      (如内网穿透/反向代理的公网入口), 写死回环名单会把它当"外站"拒掉 —— 这正是手机端
       突然打不开的根因。改为与 Host 比对后: 本机访问、局域网访问、内网穿透访问
       都能正常工作, 而真正的跨站页面(Origin 与 Host 不同源)依旧被拦。
 
@@ -3070,6 +3189,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(204, {})
 
     def do_GET(self):
+        _heal_daemons_bg()          # 同步线程意外不在时, 请求即触发补启
         if not self._guard():
             return
         path = urllib.parse.urlsplit(self.path).path
@@ -3141,7 +3261,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"error": str(e)})
             return
         if path.startswith("/api/health"):
-            self._json(200, {"ok": True, "ts": time.time()})
+            d = _load()
+            latest = max((a.get("lastCollectAt") or "" for a in d.get("accounts", [])), default="")
+            self._json(200, {"ok": True, "ts": time.time(), "version": _version(),
+                             "daemons": _daemon_status(), "lastCollectAt": latest,
+                             "dataHome": str(DATA_HOME)})
             return
         if path.startswith("/api/version/history"):
             # 完整版本历史(程序目录 version_history.json), 供「关于系统」页滚动展示
@@ -3221,6 +3345,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
+        _heal_daemons_bg()          # 同上
         if not self._guard():
             return
         path = urllib.parse.urlsplit(self.path).path
@@ -3320,7 +3445,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._json(200, {"ok": False, "detail": f"放置更新包失败: {e}"})
                 return
-            ok, detail = apply_update_pack(pack)
+            # 桌面壳模式只校验不落盘 —— 运行中替换程序文件不可靠,
+            # 真正的安装放到下次启动(apply_pending_pack), 那里没有正在运行的服务。
+            shell_mode = callable(globals().get("_RESTART_HOOK"))
+            ok, detail = apply_update_pack(pack, apply_files=not shell_mode)
             self._json(200, {"ok": ok, "detail": detail})
             return
         if path.startswith("/api/update/apply"):
@@ -3427,6 +3555,8 @@ def _auto_sync_loop(mod, interval):
                 items = _proxy_items(accounts)
                 if items:
                     r = proc_import_all({"items": items})
+                    _DAEMONS["last_ok"] = time.time()
+                    _DAEMONS["last_count"] = int(r.get("total") or 0)
                     print(f"  [自动同步] {time.strftime('%H:%M:%S')} 已刷新 {r['total']} 个账号余额", flush=True)
         except Exception as e:
             print(f"  [自动同步] 本次失败({e}), 下个周期重试", flush=True)
@@ -3452,27 +3582,96 @@ def _start_alert_thread(mod, cfg):
     return True
 
 
-def _start_daemons():
-    """启动后台线程: ①自动同步(无条件, 网页数字实时更新) ②微信预警(notify.enabled 时)"""
-    try:
-        mod = _load_proxy_module()
-        if not mod:
-            return
-        cfg = mod.load_config()
-        interval = int(cfg.get("poll_seconds", 300))
-        # ① 自动同步(无条件启动): 定时查真实余额写进 data.json
-        threading.Thread(target=_auto_sync_loop, args=(mod, interval), daemon=True).start()
-        print(f"  自动同步: 已启动(每 {interval} 秒刷新真实余额到网页)")
-        # ② 政策数据自动更新: 启动时+每天一次(配置 pricing_url 后生效)
-        threading.Thread(target=_pricing_auto_loop, daemon=True).start()
-        # ③ 微信预警(仅开启时)
-        if _start_alert_thread(mod, cfg):
-            print(f"  微信预警: 已启动(每 {mod.poll_seconds(cfg)} 秒采集+评估, 异常自动推送)")
-        else:
-            print("  微信预警: 未开启(可在「关于系统 → 微信预警」一键开启)")
-    except Exception as e:
-        print(f"  后台线程: 启动失败({e}), 不影响主程序")
+_DAEMONS = {"sync_thread": None, "started_at": 0.0, "error": "",
+            "last_ok": 0.0, "last_count": 0, "alert": False, "heal_at": 0.0,
+            "retry_at": 0.0, "tries": 0}
+_DAEMON_LOCK = threading.Lock()
 
+
+def _sync_alive():
+    th = _DAEMONS.get("sync_thread")
+    return bool(th is not None and th.is_alive())
+
+
+def _daemon_status():
+    """后台状态(供 /api/health 与「关于系统」诊断用)。"""
+    return {"syncRunning": _sync_alive(),
+            "startedAt": (datetime.fromtimestamp(_DAEMONS["started_at"]).strftime("%Y-%m-%d %H:%M:%S")
+                          if _DAEMONS.get("started_at") else ""),
+            "lastOk": (datetime.fromtimestamp(_DAEMONS["last_ok"]).strftime("%Y-%m-%d %H:%M:%S")
+                       if _DAEMONS.get("last_ok") else ""),
+            "lastCount": _DAEMONS.get("last_count") or 0,
+            "alert": bool(_DAEMONS.get("alert")),
+            "error": _DAEMONS.get("error") or "",
+            "tries": _DAEMONS.get("tries") or 0}
+
+
+def _try_start_daemons():
+    """真正启动后台线程; 幂等(已在跑就直接返回), 失败把原因留在 _DAEMONS 与日志里。"""
+    with _DAEMON_LOCK:
+        if _sync_alive():
+            return {"ok": True, "already": True, "error": ""}
+        try:
+            mod = _load_proxy_module()
+            if not mod:
+                raise RuntimeError("本地代理模块未找到(额度管家_本地代理.py)")
+            cfg = mod.load_config()
+            try:
+                interval = max(30, int(cfg.get("poll_seconds", 300) or 300))
+            except (TypeError, ValueError):
+                interval = 300
+            th = threading.Thread(target=_auto_sync_loop, args=(mod, interval), daemon=True)
+            th.start()
+            _DAEMONS.update(sync_thread=th, started_at=time.time(), error="", tries=0)
+            threading.Thread(target=_pricing_auto_loop, daemon=True).start()
+            if not _DAEMONS.get("alert"):
+                try:
+                    if _start_alert_thread(mod, cfg):
+                        _DAEMONS["alert"] = True
+                    print("  微信预警: 已启动", flush=True)
+                except Exception as e:
+                    print(f"  [后台] 预警线程启动失败({e}), 不影响同步", flush=True)
+            print(f"  自动同步: 已启动(每 {interval} 秒刷新真实余额到网页)", flush=True)
+            return {"ok": True, "already": False, "error": ""}
+        except Exception as e:
+            _DAEMONS["error"] = f"{type(e).__name__}: {e}"
+            _DAEMONS["tries"] = int(_DAEMONS.get("tries") or 0) + 1
+            print(f"  [后台] 启动失败({_DAEMONS['error']}), 稍后重试", flush=True)
+            import traceback
+            traceback.print_exc()
+            return {"ok": False, "already": False, "error": _DAEMONS["error"]}
+
+
+def _retry_daemons(delays=(2, 10, 30, 60)):
+    """启动失败后的退避重试(最多 4 次); 全败也不阻塞, 后续请求会继续尝试。"""
+    for d in delays:
+        time.sleep(d)
+        if _sync_alive():
+            return True
+        if _try_start_daemons().get("ok"):
+            print(f"  [后台] 第 {_DAEMONS['tries']} 次重试后已恢复", flush=True)
+            return True
+    print("  [后台] 多次重试仍失败; 每次网页请求会再尝试(见 /api/health)", flush=True)
+    return False
+
+
+def _start_daemons():
+    """启动后台线程(幂等, 失败自动退避重试)。桌面壳与 main() 共用此入口。"""
+    res = _try_start_daemons()
+    if not res.get("ok"):
+        threading.Thread(target=_retry_daemons, daemon=True).start()
+    return res
+
+
+def _heal_daemons_bg():
+    """请求触发的自愈: 同步线程不在就补启, 60 秒最多尝试一次(不阻塞请求)。"""
+    if _sync_alive():
+        return
+    now = time.time()
+    if now - float(_DAEMONS.get("heal_at") or 0) < 60:
+        return
+    _DAEMONS["heal_at"] = now
+    threading.Thread(target=_try_start_daemons, daemon=True).start()
 
 def _pricing_auto_loop():
     """政策数据自动更新: 启动10秒后查一次, 之后每天查一次(pricing_url 有配置才拉取)"""
@@ -3485,6 +3684,33 @@ def _pricing_auto_loop():
         except Exception:
             pass
         time.sleep(24 * 3600)
+
+
+def apply_pending_pack():
+    """V3.33.16: 启动时(服务尚未监听)应用目录内比当前版本新的更新包。
+    这是唯一安全的替换时机 —— 没有正在运行的进程读这些文件。
+    返回 (是否安装, 新版本号/说明)。"""
+    global _RESTART_HOOK
+    try:
+        pack = _find_pack()
+        if not pack:
+            return False, ""
+        man = _read_manifest(pack)
+        latest = str(man.get("version") or "")
+        if _ver_tuple(latest) <= _ver_tuple(_version()):
+            return False, ""
+        # 启动安装时禁止"更新后再重启"——本来就是刚启动, 不需要也不该 execv
+        _old_hook = _RESTART_HOOK
+        _RESTART_HOOK = lambda: None
+        try:
+            ok, detail = apply_update_pack(pack, apply_files=True)
+        finally:
+            _RESTART_HOOK = _old_hook
+        print(f"  [启动安装] {detail}", flush=True)
+        return bool(ok), (latest if ok else detail)
+    except Exception as e:
+        print(f"  [启动安装] 失败({e}), 继续用当前版本启动", flush=True)
+        return False, ""
 
 
 def _cleanup_orphan_assets():
